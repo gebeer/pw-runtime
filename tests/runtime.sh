@@ -52,8 +52,12 @@ case "$1" in
     *) echo "Unexpected ddev call: $*" >&2; exit 99 ;;
 esac
 SH
-printf '#!/usr/bin/env bash\nprintf 200\n' > "$TMP/fake/curl" # the readiness poll must not reach the network
-chmod +x "$TMP/fake/ddev" "$TMP/fake/curl"
+# The readiness poll must neither reach the network nor really wait.
+# shellcheck disable=SC2016
+printf '#!/usr/bin/env bash\necho poll >> "$FAKE_POLLS"\nprintf %%s "${HTTP_CODE-200}"\n' > "$TMP/fake/curl"
+printf '#!/usr/bin/env bash\n' > "$TMP/fake/sleep"
+chmod +x "$TMP/fake/ddev" "$TMP/fake/curl" "$TMP/fake/sleep"
+export FAKE_POLLS="$TMP/polls.log"
 export PATH="$TMP/fake:$PATH" FAKE_SRC="$SRC" FAKE_LOG="$TMP/ddev.log" FAKE_ACTIVE="$TMP/active" FAKE_SQL="$TMP/sql.log"
 reject() {
     if "$@" > "$TMP/rejected.log" 2>&1; then echo "FAIL: expected failure (line ${BASH_LINENO[0]})" >&2; exit 1; fi
@@ -119,6 +123,23 @@ bash "$CLI" up > /dev/null 2>&1
 printf 'edited\n' > .htaccess
 bash "$CLI" up > /dev/null 2>&1
 [[ "$(< .htaccess)" == edited ]] # existing local copies are kept
+
+# up fails, without JSON, when the runtime does not answer properly: an application error at once,
+# a router answer (or none) after 30 polls. The runtime stays provisioned for debugging.
+for code in 500 503; do
+    : > "$FAKE_POLLS"
+    if HTTP_CODE="$code" bash "$CLI" up > "$TMP/broken.json" 2> "$TMP/rejected.log"; then echo "FAIL: up succeeded on HTTP $code" >&2; exit 1; fi
+    grep -q "answers HTTP $code; see \"ddev logs\"" "$TMP/rejected.log"
+    [[ ! -s "$TMP/broken.json" && "$(wc -l < "$FAKE_POLLS")" == 1 && -f .pw-runtime/state/ready ]]
+done
+for code in 502 404 000 ''; do
+    : > "$FAKE_POLLS"
+    if HTTP_CODE="$code" bash "$CLI" up > "$TMP/broken.json" 2> "$TMP/rejected.log"; then echo "FAIL: up succeeded on HTTP '$code'" >&2; exit 1; fi
+    grep -q "answers HTTP ${code:-nothing}; see \"ddev logs\"" "$TMP/rejected.log"
+    [[ ! -s "$TMP/broken.json" && -f .pw-runtime/state/ready ]]
+    [[ -z "$code" || "$(wc -l < "$FAKE_POLLS")" == 30 ]]
+done
+HTTP_CODE=302 bash "$CLI" up 2> /dev/null | jq -e '.ready == true' > /dev/null # redirects and client errors are answers
 
 # Teardown deletes only this runtime; a failed delete keeps the metadata for a retry.
 export DELETE_FAIL=yes

@@ -333,7 +333,9 @@ YAML
         [[ "$rc" =~ ^(000|404|502)$ ]] || break
         sleep 1
     done
-    [[ ! "$rc" =~ ^(000|404|502)$ ]] || log "NOTICE: $url still answers HTTP $rc; see \"ddev logs\""
+    # The ready marker stays: the runtime is provisioned, and the real error page must be reachable for debugging.
+    [[ "$rc" =~ ^[1-4][0-9][0-9]$ && "$rc" != 404 ]] \
+        || die "runtime $SLUG is provisioned, but $url answers HTTP ${rc:-nothing}; see \"ddev logs\" in this worktree, fix it and run \"pw-runtime up\" again"
     log "ready: $url ($mode files; mail -> this runtime's Mailpit). Run \"pw-runtime down\" before removing this worktree."
     jq -cn --arg slug "$SLUG" --arg url "$url" --arg mode "$mode" '{slug: $slug, url: $url, fileMode: $mode, ready: true}' >&3
 }

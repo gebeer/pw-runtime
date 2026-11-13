@@ -48,6 +48,7 @@ A project without `.pw-runtime/sanitize.sql` is refused by `up`; `guard` and `do
 - `down` deletes only the DDEV project with this worktree's name, registered at this folder, and only files carrying the `pw-runtime: generated` marker. Private files, cache and logs stay until the worktree is removed. Without runtime metadata it does nothing and succeeds.
 - `gc` deletes a DDEV project only if DDEV reports its folder missing and its name ends in the folder name and path hash recomputed from that folder. `up` runs `gc` first.
 - A repeated `up` keeps the runtime database and private files. A failed first import is imported again.
+- `up` prints its JSON line and exits 0 only once the runtime URL answers. It polls up to 30 times while DDEV's router answers 502, 404 or nothing; if that persists, or the site answers 5xx, `up` fails without JSON and points to `ddev logs`. The runtime stays provisioned (HTTP stays open) so the error can be debugged; run `up` again after the fix.
 - The seed cache is never deleted by the tool. To rebuild it: `(flock 7; rm -rf -- "$seed") 7>"$seed.lock"`.
 
 Known limits:
