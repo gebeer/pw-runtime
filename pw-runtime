@@ -79,6 +79,20 @@ throw new \RuntimeException('Code-only worktree: run "pw-runtime up" here before
 PHP
 }
 
+# Agent settings and skills are usually untracked, so a fresh worktree has none of them.
+# Copied once from the main checkout, symlinks kept as they are; teardown leaves the copies.
+copy_agent_config() {
+    local dir main
+    main="$(dirname "$COMMON")"
+    for dir in .agents .claude .pi; do
+        [[ -e "$main/$dir" || -L "$main/$dir" ]] || continue
+        [[ ! -e "$dir" && ! -L "$dir" ]] || continue
+        [[ -z "$(git ls-files -- "$dir")$(git -C "$main" ls-files -- "$dir")" ]] || continue
+        exclude "/$dir"
+        cp -a --reflink=auto "$main/$dir" "$dir"
+    done
+}
+
 # Refresh the per-source seed, then reflink it into the worktree. Exit 3: reflink impossible, nothing copied.
 seed_reflink_copy() (
     set -euo pipefail
@@ -116,6 +130,7 @@ cmd_guard() {
         return 0
     fi
     install_guard
+    copy_agent_config
     log 'code-only guard ready; DDEV was not started'
 }
 
@@ -214,6 +229,7 @@ cmd_up() {
     fi
     rm -f $STATE/ready
     install_guard
+    copy_agent_config
 
     # Untracked files the project needs from the main checkout; existing copies are kept.
     if [[ -f .pw-runtime/copy-from-main ]]; then

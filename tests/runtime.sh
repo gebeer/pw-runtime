@@ -31,6 +31,8 @@ printf '<?php // fake source\n' > "$SRC/site/config-dev.php"
 printf 'RewriteEngine On\n' > "$SRC/.htaccess"
 printf 'body{}\n' > "$SRC/build/dist/app.css"
 printf 'upload\n' > "$SRC/site/assets/files/upload"
+mkdir "$SRC/.claude"
+printf 'untracked agent config\n' > "$SRC/.claude/settings.local.json"
 git -C "$SRC" worktree add --detach -q "$TMP/123" HEAD
 
 cat > "$TMP/fake/ddev" <<'SH'
@@ -94,6 +96,7 @@ grep -qF "^www\\.$EXPECTED_SLUG\\.ddev\\.site\$" ".ddev/traefik/config/$EXPECTED
 git diff --quiet
 # Local files listed by the project are copied; sanitizing SQL and the hook ran.
 cmp "$SRC/.htaccess" .htaccess
+cmp "$SRC/.claude/settings.local.json" .claude/settings.local.json # agent config comes along without a guard call
 cmp "$SRC/build/dist/app.css" build/dist/app.css
 grep -q 'UPDATE modules' "$FAKE_SQL"
 [[ "$(< "$TMP/after-up.log")" == "$EXPECTED_SLUG https://www.$EXPECTED_SLUG.ddev.site" ]]

@@ -5,7 +5,7 @@ project, database, hostnames, cache, logs and sessions. It never writes to the m
 checkout's database or files, and never starts, stops or changes the main DDEV project.
 
 ```sh
-pw-runtime guard   # fresh worktree: block ProcessWire until a runtime exists (no DDEV)
+pw-runtime guard   # fresh worktree: block ProcessWire until a runtime exists, copy agent config (no DDEV)
 pw-runtime up      # create or reuse this worktree's runtime; prints one JSON line
 pw-runtime down    # delete this worktree's runtime; run before removing the worktree
 pw-runtime gc      # delete runtimes whose worktree folder is gone
@@ -40,7 +40,8 @@ A project without `.pw-runtime/sanitize.sql` is refused by `up`; `guard` and `do
 - **Router** = if the project tracks a customized `.ddev/traefik/config/<name>.yaml` (no `#ddev-generated`), the runtime gets its own copy with the name replaced.
 - **Config** = generated `site/config-dev.php`. It answers 503 to HTTP until the database is imported and sanitized, then loads a private copy of the source's `site/config-dev.php` (or the tracked `site/config.php` if the source has none) and forces the database to the runtime's own `db` container, core WireMail (DDEV's Mailpit) and the runtime `httpHosts`.
 - **Files** = private: a per-source seed in `~/.cache/pw-runtime/<hash>/files-seed` is refreshed with `rsync -a --delete` and reflinked into the worktree. The first seed is one full copy. Where a reflink is impossible, the source's `site/assets/files` is mounted read-only instead, with a notice; uploads and new image variations then fail.
-- **Ignore rules** for generated files go into the repository's `info/exclude`.
+- **Agent config** = `guard` and `up` copy `.agents`, `.claude` and `.pi` from the main checkout, each only if it exists there, the repository does not track it and the worktree has none. Symlinks are copied as symlinks. An existing copy is never updated, and `down` leaves the copies; they go with the worktree.
+- **Ignore rules** for generated and copied files go into the repository's `info/exclude`, so they never show in `git status` and do not block `git worktree remove`.
 
 ## Safety
 

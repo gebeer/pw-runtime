@@ -16,8 +16,15 @@ printf 'name: source\n' > "$SRC/.ddev/config.yaml"
 printf '<?php // tracked\n' > "$SRC/site/config.php"
 printf 'SELECT 1;\n' > "$SRC/.pw-runtime/sanitize.sql"
 printf 'site/assets/\n' > "$SRC/.gitignore"
+mkdir "$SRC/.agents"
+printf 'tracked\n' > "$SRC/.agents/tracked.md"
 git -C "$SRC" add .
 git -C "$SRC" commit -qm initial
+# Untracked agent config in the main checkout: files, an absolute symlink and an empty folder.
+mkdir -p "$SRC/.claude/skills" "$SRC/.pi" "$TMP/skill-target"
+printf '{}\n' > "$SRC/.claude/settings.local.json"
+ln -s "$TMP/skill-target" "$SRC/.claude/skills/shared"
+printf 'untracked\n' > "$SRC/.agents/local.md"
 printf '<?php // fixture\n' > "$SRC/site/config-dev.php"
 git -C "$SRC" worktree add --detach -q "$TMP/123" HEAD
 
@@ -81,7 +88,15 @@ printf '<?php // custom local config\n' > site/config-dev.php
 reject 'refusing to overwrite custom' bash "$CLI" up
 rm site/config-dev.php
 bash "$CLI" guard
+# Untracked agent config comes along from the main checkout: symlinks as they are, existing copies kept,
+# a folder the repository tracks left alone, nothing visible to git.
+[[ "$(readlink .claude/skills/shared)" == "$TMP/skill-target" && -f .claude/settings.local.json && -d .pi ]]
+[[ ! -e .agents/local.md ]]
+printf 'mine\n' > .claude/settings.local.json
+rm -rf .agents .pi
 bash "$CLI" guard # safe to replay
+[[ "$(<.claude/settings.local.json)" == mine && -d .pi && ! -e .agents ]]
+git checkout -q .agents
 grep -qxF '// pw-runtime: generated code-only guard' site/config-dev.php
 # The guard blocks an accidental ProcessWire boot instead of falling back to the tracked config.
 if php -n -r 'require "site/config-dev.php";' >/dev/null 2>&1; then echo 'FAIL: code-only boot was not blocked' >&2; exit 1; fi
@@ -108,4 +123,8 @@ bash "$CLI" down
 grep -qxF '// pw-runtime: generated code-only guard' site/config-dev.php
 bash "$CLI" down 2>&1 | grep -q 'nothing to tear down'
 [[ "$(<"$SRC/site/config-dev.php")" == '<?php // fixture' && -z "$(git status --porcelain)" ]]
-echo 'PASS: main checkout, opt-in, wrong registration, stopped source, custom config, identity change, config collision and teardown guards'
+# Nothing the tool generated or copied blocks a plain worktree removal.
+cd "$SRC"
+git worktree remove "$TMP/123"
+[[ ! -e "$TMP/123" && -f .claude/settings.local.json && -L .claude/skills/shared ]] # the main checkout keeps its own
+echo 'PASS: agent config copy, main checkout, opt-in, wrong registration, stopped source, custom config, identity change, config collision and teardown guards'
