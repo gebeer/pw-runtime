@@ -21,8 +21,9 @@ Run every command inside the worktree. Needs `ddev`, `jq`, `flock`, `rsync`, `cu
 
 It links the CLI to `~/.local/bin/pw-runtime` and the agent skill
 ([`.agents/skills/pw-runtime/SKILL.md`](.agents/skills/pw-runtime/SKILL.md)) to `~/.agents/skills/pw-runtime`
-(pi) and, through that entry, to `~/.claude/skills/pw-runtime` (Claude Code). It can be repeated
-and never replaces an entry it did not create.
+(pi) and, through that entry, to `~/.claude/skills/pw-runtime` (Claude Code). Where the Herdr app
+is set up it also links the worktree mod (see [Herdr](#herdr)). It can be repeated and never
+replaces an entry it did not create.
 
 ## Project opt-in: `.pw-runtime/` (tracked)
 
@@ -85,12 +86,29 @@ DDEV merges the generated delta over its own config: the https router forwards t
 vhost on port 443, the http router redirects to https. It works the same in the main project
 and in every runtime.
 
+## Herdr
+
+`herdr/pw-worktree` is a clone of the Herdr app's shipped `worktree` mod (0.1.15), linked into
+`~/.config/herdr-app/mods/pw-worktree`; Herdr loads and hot-reloads it through the link. It adds
+two calls, both no-ops outside opted-in ProcessWire worktrees, so they run for every repository:
+
+- **New worktree:** after `git worktree add`, `pw-runtime guard` runs in the new checkout. If it
+  fails or `pw-runtime` is not installed, the worktree and its space are still made and a
+  warning notification says so.
+- **Remove worktree:** `pw-runtime down` runs first. If it fails, its error shows in the dialog
+  and nothing is closed or removed. Where `pw-runtime` is not installed the removal goes on.
+
+Herdr's own menus keep opening the shipped `worktree` mod; a menu must name `pw-worktree` to get
+these calls. Herdr updates do not reach the clone: compare it with the shipped mod after an
+update (`diff ~/.config/herdr-app/mods/{worktree,pw-worktree}/main.js` shows only the additions).
+
 ## Tests
 
 ```sh
 bash tests/guards.sh        # fake ddev: safety refusals
 bash tests/runtime.sh       # fake ddev: orchestration, hooks, gc, private files
 bash tests/install.sh       # install.sh against a throwaway HOME
+node herdr/pw-worktree/main.test.mjs   # the mod's two pw-runtime calls, Herdr stubbed
 bash tests/integration.sh   # real DDEV, about a minute: builds and deletes its own throwaway projects (pwrt-itest*)
 bash tests/integration.sh mysql 8.0
 ```

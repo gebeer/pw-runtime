@@ -23,3 +23,5 @@ link "$REPO/pw-runtime" "$HOME/.local/bin/pw-runtime"
 # pi reads ~/.agents/skills; Claude Code reads ~/.claude/skills and gets a link to the same entry.
 link "$REPO/.agents/skills/pw-runtime" "$HOME/.agents/skills/pw-runtime"
 link "$HOME/.agents/skills/pw-runtime" "$HOME/.claude/skills/pw-runtime"
+# Herdr app: the worktree mod, only where Herdr is set up.
+[[ ! -d "$HOME/.config/herdr-app/mods" ]] || link "$REPO/herdr/pw-worktree" "$HOME/.config/herdr-app/mods/pw-worktree"

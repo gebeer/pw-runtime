@@ -15,6 +15,11 @@ bash "$REPO/install.sh" > /dev/null
 [[ -f "$HOME/.claude/skills/pw-runtime/SKILL.md" ]] # the chain resolves to the skill
 
 [[ "$(bash "$REPO/install.sh" | grep -c '^ok: ')" == 3 ]] # a repeat changes nothing
+[[ ! -e "$HOME/.config" ]] # no Herdr here: no mod link, no folder made for it
+
+mkdir -p "$HOME/.config/herdr-app/mods"
+bash "$REPO/install.sh" > /dev/null
+[[ "$(readlink "$HOME/.config/herdr-app/mods/pw-worktree")" == "$REPO/herdr/pw-worktree" ]]
 
 # A foreign link and a real folder are both refused and left alone.
 rm "$HOME/.claude/skills/pw-runtime"
