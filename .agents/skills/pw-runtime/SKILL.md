@@ -23,7 +23,7 @@ Contract and details: `README.md` beside the script, `$(dirname "$(readlink -f "
    {"slug":"site-feature-ab12cd","url":"https://www.site-feature-ab12cd.ddev.site","fileMode":"private","ready":true}
    ```
    `fileMode: "readonly"` means uploads and image variations fail in this runtime; say so in your report and test those elsewhere.
-3. **Use it:** every HTTP check goes to `url`. Once `up` has succeeded, `ddev` commands run from the worktree root act on the runtime. Mail sent with `wireMail()` lands in the runtime's Mailpit: `ddev exec curl -s http://127.0.0.1:8025/api/v1/messages`, or the Mailpit URL in `ddev describe`.
+3. **Use it:** every HTTP check goes to `url`. Once `up` has succeeded, `ddev` commands run from the worktree root act on the runtime. Before that, DDEV refuses every `ddev` command there ("already exists for …" or "project root is already set to …") because the name still belongs to the main project; that is harmless, so run `pw-runtime up` and ignore DDEV's hint to `ddev stop --unlist`. Mail sent with `wireMail()` lands in the runtime's Mailpit: `ddev exec curl -s http://127.0.0.1:8025/api/v1/messages`, or the Mailpit URL in `ddev describe`.
 4. **Again:** a repeated `up` is safe; it keeps the runtime database and files. For a fresh database copy run `down`, then `up`.
 5. **Finish:** `pw-runtime down` from the worktree root, then `git worktree remove`. `down` deletes the runtime database.
 
