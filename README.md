@@ -19,6 +19,8 @@ Run every command inside the worktree. Needs `ddev`, `jq`, `flock`, `rsync`, `cu
 ln -s ~/repos/pw-runtime/pw-runtime ~/.local/bin/pw-runtime
 ```
 
+Agents get the short version from the skill in [`skills/pw-runtime/SKILL.md`](skills/pw-runtime/SKILL.md).
+
 ## Project opt-in: `.pw-runtime/` (tracked)
 
 | File | Required | Purpose |
