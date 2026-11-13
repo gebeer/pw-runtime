@@ -35,8 +35,8 @@ function fixture(pw) {
   return w;
 }
 
-// Create: the space opens whatever the guard does; a missing or failing guard is only reported.
-for (const [pw, body] of [[0, null], [1, "pw-runtime: ERROR: boom"], ["missing", "pw-runtime is not installed."]]) {
+// Create: the space opens whatever the guard does; a failing guard is only reported, a missing pw-runtime not at all.
+for (const [pw, body] of [[0, null], [1, "pw-runtime: ERROR: boom"], ["missing", null]]) {
   const w = fixture(pw);
   assert.equal(await w.mod.create(), "");
   assert.deepEqual(w.calls, ["pw-runtime guard", "space.new"]);

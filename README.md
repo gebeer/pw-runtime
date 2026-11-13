@@ -93,8 +93,8 @@ and in every runtime.
 two calls, both no-ops outside opted-in ProcessWire worktrees, so they run for every repository:
 
 - **New worktree:** after `git worktree add`, `pw-runtime guard` runs in the new checkout. If it
-  fails or `pw-runtime` is not installed, the worktree and its space are still made and a
-  warning notification says so.
+  fails, the worktree and its space are still made and a warning notification says so. Where
+  `pw-runtime` is not installed nothing is reported.
 - **Remove worktree:** `pw-runtime down` runs first. If it fails, its error shows in the dialog
   and nothing is closed or removed. Where `pw-runtime` is not installed the removal goes on.
 

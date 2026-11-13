@@ -201,9 +201,10 @@ export default class Worktree extends View {
     const add = exists ? ["worktree", "add", path, branch] : ["worktree", "add", "-b", branch, path, "HEAD"];
     const r = await git(this.repo.top, add, this.on, 600_000);
     if (!r.ok) return r.err || "git worktree add failed.";
-    // The worktree exists either way: a missing or failing guard is only reported.
+    // The worktree exists either way: a failing guard is only reported.
+    // Not installed: nothing to report, that machine has no runtimes.
     const guard = await pwRuntime("guard", path, this.on);
-    if (guard !== "") notify({ title: "Worktree created without pw-runtime guard", body: guard ?? "pw-runtime is not installed.", level: "warning" });
+    if (guard) notify({ title: "Worktree created without pw-runtime guard", body: guard, level: "warning" });
     const p = props();
     // Leave spaces unnamed so they follow the checkout folder and nest under the repo.
     run("space.new", { folder: path, machine: this.on ?? "", tab: p.tab, argv: p.argv });
