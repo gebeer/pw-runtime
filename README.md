@@ -16,10 +16,13 @@ Run every command inside the worktree. Needs `ddev`, `jq`, `flock`, `rsync`, `cu
 ## Install
 
 ```sh
-ln -s ~/repos/pw-runtime/pw-runtime ~/.local/bin/pw-runtime
+./install.sh
 ```
 
-Agents get the short version from the skill in [`skills/pw-runtime/SKILL.md`](skills/pw-runtime/SKILL.md).
+It links the CLI to `~/.local/bin/pw-runtime` and the agent skill
+([`.agents/skills/pw-runtime/SKILL.md`](.agents/skills/pw-runtime/SKILL.md)) to `~/.agents/skills/pw-runtime`
+(pi) and, through that entry, to `~/.claude/skills/pw-runtime` (Claude Code). It can be repeated
+and never replaces an entry it did not create.
 
 ## Project opt-in: `.pw-runtime/` (tracked)
 
@@ -87,6 +90,7 @@ and in every runtime.
 ```sh
 bash tests/guards.sh        # fake ddev: safety refusals
 bash tests/runtime.sh       # fake ddev: orchestration, hooks, gc, private files
+bash tests/install.sh       # install.sh against a throwaway HOME
 bash tests/integration.sh   # real DDEV, about a minute: builds and deletes its own throwaway projects (pwrt-itest*)
 bash tests/integration.sh mysql 8.0
 ```
