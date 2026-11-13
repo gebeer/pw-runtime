@@ -25,6 +25,26 @@ It links the CLI to `~/.local/bin/pw-runtime` and the agent skill
 is set up it also links the worktree mod (see [Herdr](#herdr)). It can be repeated and never
 replaces an entry it did not create.
 
+## Quick start
+
+```sh
+# once per project, in the main checkout (keep it running in DDEV)
+mkdir .pw-runtime
+echo "UPDATE modules SET data = '{}' WHERE class = 'WireMailSmtp';" > .pw-runtime/sanitize.sql
+git add .pw-runtime && git commit -m "chore: opt in to pw-runtime"
+
+# per feature
+git worktree add ../myproject-feature -b feature
+cd ../myproject-feature
+pw-runtime up       # {"slug":"...","url":"https://...","fileMode":"...","ready":true}
+# ... work, test, commit ...
+pw-runtime down
+cd - && git worktree remove ../myproject-feature
+```
+
+Private files need a copy-on-write filesystem (tested on btrfs) holding both `~/.cache` and the
+worktree; see [What is derived](#what-is-derived).
+
 ## Project opt-in: `.pw-runtime/` (tracked)
 
 | File | Required | Purpose |
