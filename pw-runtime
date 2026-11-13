@@ -1,0 +1,349 @@
+#!/usr/bin/env bash
+# pw-runtime: an isolated DDEV runtime per linked git worktree of a ProcessWire project.
+# Commands: guard | up | down | gc. Behaviour contract: README.md.
+set -euo pipefail
+
+MARK='pw-runtime: generated'
+GUARD="// $MARK code-only guard"
+STATE=.pw-runtime/state
+
+die() { echo "pw-runtime: ERROR: $*" >&2; exit 1; }
+log() { echo "pw-runtime: $*" >&2; }
+# DDEV must not inherit the worktree lock: a lingering helper process would keep holding it.
+ddev() { command ddev "$@" 9>&-; }
+
+# The salt keeps slugs apart from any other tool that hashes checkout paths; gc relies on that.
+path_hash() { printf 'pw-runtime:%s' "$1" | sha1sum | cut -c1-6; }
+dir_base() {
+    local base
+    base="$(printf '%s' "$(basename "$1")" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | cut -c1-20)"
+    base="${base#"${base%%[!-]*}"}"
+    printf '%s' "${base%"${base##*[!-]}"}"
+}
+
+checkout() {
+    ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || die 'not inside a git checkout'
+    ROOT="$(realpath "$ROOT")"
+    cd "$ROOT"
+    COMMON="$(realpath "$(git rev-parse --path-format=absolute --git-common-dir)")"
+}
+is_linked() { [[ -f .git && "$(basename "$COMMON")" == .git ]]; }
+
+# Sets SRC, SRC_NAME and SLUG, takes the per-worktree lock and checks the DDEV registration.
+identity() {
+    local command base
+    is_linked || die 'run from a linked git worktree, never the main checkout'
+    SRC="$(dirname "$COMMON")"
+    [[ -f .ddev/config.yaml && -d site ]] || die 'not a ProcessWire + DDEV worktree'
+    for command in ddev jq flock; do command -v "$command" >/dev/null || die "$command is required"; done
+    SRC_NAME="$(awk '$1 == "name:" {print $2; exit}' "$SRC/.ddev/config.yaml" 2>/dev/null)" || true
+    SRC_NAME="${SRC_NAME//[\"\']/}"
+    [[ "$SRC_NAME" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "cannot read a DDEV project name from $SRC/.ddev/config.yaml"
+    base="$(dir_base "$ROOT")"
+    [[ -n "$base" ]] || die 'cannot derive a name from the worktree folder'
+    SLUG="$SRC_NAME-$base-$(path_hash "$ROOT")"
+    ((${#SLUG} <= 63)) || die "runtime name $SLUG is too long for a hostname"
+    exec 9>"$COMMON/pw-runtime-$SLUG.lock"
+    flock -n 9 || die 'another pw-runtime command is already operating on this worktree'
+    check_registration
+}
+
+# Address DDEV projects by name only: a copied DDEV config must never select the source project.
+registered_root() {
+    ddev list -j | jq -r --arg name "$SLUG" '.raw[]? | select(.name == $name) | .approot'
+}
+check_registration() {
+    local registered
+    registered="$(registered_root)"
+    [[ -z "$registered" || "$(realpath -m "$registered")" == "$ROOT" ]] || die "$SLUG belongs to a different checkout"
+}
+
+# Ignore rules live in the repository's info/exclude, so no project needs .gitignore edits.
+exclude() {
+    local line file="$COMMON/info/exclude"
+    mkdir -p "$COMMON/info"
+    [[ ! -s "$file" || -z "$(tail -c1 "$file")" ]] || echo >> "$file"
+    for line in "$@"; do
+        grep -qxF -- "$line" "$file" 2>/dev/null || printf '%s\n' "$line" >> "$file"
+    done
+}
+
+# Without a runtime, ProcessWire must fail instead of booting with the tracked (live) configuration.
+install_guard() {
+    exclude /site/config-dev.php /site/config-pw-runtime.php "/$STATE/" /.ddev/config.local.yaml /.ddev/docker-compose.pw-runtime.yaml
+    [[ ! -e site/config-dev.php && ! -L site/config-dev.php ]] || return 0
+    cat > site/config-dev.php <<PHP
+<?php namespace ProcessWire;
+$GUARD
+throw new \RuntimeException('Code-only worktree: run "pw-runtime up" here before using ProcessWire.');
+PHP
+}
+
+# Refresh the per-source seed, then reflink it into the worktree. Exit 3: reflink impossible, nothing copied.
+seed_reflink_copy() (
+    set -euo pipefail
+    src="$1" seed="$2" dest="$3" probe='' clone=''
+    command -v rsync >/dev/null || { echo 'pw-runtime: rsync is required for private files' >&2; exit 1; }
+    umask 077
+    mkdir -p "$(dirname "$seed")" "$dest"
+    seed="$(realpath -m "$seed")"
+    if git -C "$(dirname "$seed")" rev-parse --git-dir >/dev/null 2>&1 || [[ "$seed" == */site/assets || "$seed" == */site/assets/* ]]; then
+        echo 'pw-runtime: files seed must be outside Git checkouts and site/assets' >&2
+        exit 1
+    fi
+    # Worktrees of one source share one refresh-and-clone critical section.
+    exec 7>"$seed.lock"
+    flock 7
+    trap 'rm -f "$probe" "$clone"' EXIT
+    probe="$(mktemp "$(dirname "$seed")/.reflink-probe.XXXXXX")"
+    clone="$(mktemp "$dest/.reflink-probe.XXXXXX")"
+    printf 'reflink capability check\n' > "$probe"
+    cp --reflink=always "$probe" "$clone" 2>/dev/null || exit 3
+    rm -f "$probe" "$clone"
+    [[ -d "$seed" ]] || echo "pw-runtime: first files seed for this source: copying $src once ..." >&2
+    mkdir -p "$seed"
+    echo "pw-runtime: refreshing files seed $seed ..." >&2
+    rsync -a --delete "$src/" "$seed/"
+    echo 'pw-runtime: reflinking files privately ...' >&2
+    cp -a --reflink=always "$seed/." "$dest/"
+)
+
+cmd_guard() {
+    (($# == 0)) || die 'usage: pw-runtime guard'
+    checkout
+    if [[ ! -d .pw-runtime || ! -d site ]] || ! is_linked; then
+        log 'guard: not an opted-in ProcessWire worktree; nothing to do'
+        return 0
+    fi
+    install_guard
+    log 'code-only guard ready; DDEV was not started'
+}
+
+# Delete runtimes whose worktree folder is gone. Ownership proof: the name ends in the
+# folder name and salted path hash recomputed from the approot DDEV registered.
+cmd_gc() {
+    (($# == 0)) || die 'usage: pw-runtime gc'
+    local list name approot base failed=0
+    list="$(ddev list -j)" || die 'gc: ddev list failed'
+    while IFS=$'\t' read -r name approot; do
+        [[ -n "$approot" && ! -e "$approot" ]] || continue
+        base="$(dir_base "$approot")"
+        [[ -n "$base" && "$name" == ?*"-$base-$(path_hash "$approot")" ]] || continue
+        log "gc: deleting runtime $name of removed folder $approot"
+        ddev delete -Oy "$name" </dev/null >&2 || failed=1
+    done < <(jq -r '.raw[]? | select(.status == "project directory missing") | [.name, .approot] | @tsv' <<<"$list")
+    ((failed == 0)) || die 'gc: could not delete every orphaned runtime'
+}
+
+cmd_down() {
+    (($# == 0)) || die 'usage: pw-runtime down'
+    checkout
+    if [[ ! -e $STATE && ! -L $STATE ]]; then
+        log 'no runtime here; nothing to tear down'
+        return 0
+    fi
+    # Present, partial or malformed metadata fails closed from here on.
+    identity
+    [[ -f $STATE/root && "$(<$STATE/root)" == "$ROOT" ]] || die 'no owned runtime metadata here'
+    local file
+    if [[ -n "$(registered_root)" ]]; then
+        ddev delete -Oy "$SLUG" >&2
+    fi
+    for file in .ddev/config.local.yaml .ddev/docker-compose.pw-runtime.yaml ".ddev/traefik/config/$SLUG.yaml" site/config-dev.php; do
+        if [[ -e "$file" ]]; then
+            # A router file without the marker is DDEV's own generated one: leave it.
+            grep -q "$MARK" "$file" || { [[ "$file" == .ddev/traefik/* ]] && continue; die "refusing to remove unrecognized $file"; }
+            rm "$file"
+        fi
+    done
+    rm -f site/config-pw-runtime.php
+    rm -rf "$STATE"
+    install_guard
+    log "deleted $SLUG; private files, cache, logs and sessions stay in this worktree"
+}
+
+cmd_up() {
+    (($# == 0)) || die "usage: pw-runtime up (unknown: $1)"
+    exec 3>&1 >&2 # stdout carries only the final JSON line
+    checkout
+    [[ -f .pw-runtime/sanitize.sql ]] || die 'this project has not opted in: .pw-runtime/sanitize.sql is required'
+    identity
+    (cmd_gc) || log 'gc failed; continuing'
+
+    local base=config.php status tld host new url mode file path dump seed rc
+    local -a hosts=()
+    [[ -d "$SRC/site/assets/files" ]] || die "source $SRC has no site/assets/files"
+    [[ ! -f "$SRC/site/config-dev.php" ]] || base=config-pw-runtime.php
+    [[ "$base" != config.php || -f site/config.php ]] || die 'found neither a source site/config-dev.php nor a tracked site/config.php'
+    status="$(cd "$SRC" && ddev describe -j)" || die "source must already be running; start DDEV at $SRC, then retry (it will not be started)"
+    jq -e --arg src "$SRC" --arg name "$SRC_NAME" '.raw | .approot == $src and .status == "running" and .name == $name' <<<"$status" >/dev/null \
+        || die "source must already be running as $SRC_NAME at $SRC; start DDEV there, then retry (it will not be started)"
+
+    # Hostnames: the source's own, with its project name replaced by the slug.
+    tld="$(jq -r --arg p "$SRC_NAME." '[.raw.hostnames[]? | select(startswith($p)) | ltrimstr($p)] | min_by(length) // "ddev.site"' <<<"$status")"
+    url="https://$SLUG.$tld"
+    while IFS= read -r host; do
+        new="${host//$SRC_NAME/$SLUG}"
+        if [[ "$new" == "$host" ]]; then
+            log "NOTICE: source hostname $host.$tld does not contain the project name; not carried over"
+            continue
+        fi
+        hosts+=("$new")
+        [[ "$new" != "www.$SLUG" ]] || url="https://www.$SLUG.$tld"
+    done < <(jq -r --arg main "$SRC_NAME.$tld" --arg suffix ".$tld" '.raw.hostnames[]? | select(. != $main and endswith($suffix)) | rtrimstr($suffix)' <<<"$status")
+
+    # Refuse to clobber custom local files or to adopt a runtime of another checkout or source.
+    if [[ -f $STATE/root ]]; then
+        [[ "$(<$STATE/root)" == "$ROOT" && "$(<$STATE/source)" == "$SRC" ]] || die 'runtime identity changed; run "pw-runtime down" first'
+    else
+        for file in .ddev/config.local.yaml .ddev/docker-compose.pw-runtime.yaml site/config-pw-runtime.php; do
+            [[ ! -e "$file" && ! -L "$file" ]] || die "refusing to overwrite $file"
+        done
+        if [[ -e site/config-dev.php || -L site/config-dev.php ]]; then
+            [[ ! -L site/config-dev.php ]] && grep -qxF -- "$GUARD" site/config-dev.php || die 'refusing to overwrite custom site/config-dev.php'
+        fi
+        [[ ! -e $STATE ]] || die "unrecognized $STATE directory"
+        # Left behind by a removed worktree at this same path: provably this slug's, so start clean.
+        if [[ -n "$(registered_root)" ]]; then
+            log "deleting stale runtime $SLUG of an earlier worktree at this path"
+            ddev delete -Oy "$SLUG"
+        fi
+        mkdir "$STATE"
+        printf '%s\n' "$ROOT" > $STATE/root
+        printf '%s\n' "$SRC" > $STATE/source
+    fi
+    rm -f $STATE/ready
+    install_guard
+
+    # Untracked files the project needs from the main checkout; existing copies are kept.
+    if [[ -f .pw-runtime/copy-from-main ]]; then
+        while IFS= read -r path || [[ -n "$path" ]]; do
+            path="${path%$'\r'}"
+            path="${path%/}"
+            [[ -n "$path" && "$path" != \#* ]] || continue
+            [[ "$path" != /* && "/$path/" != */../* ]] || die "copy-from-main: unsafe path $path"
+            exclude "/$path"
+            [[ ! -e "$path" && ! -L "$path" ]] || continue
+            [[ -e "$SRC/$path" ]] || die "copy-from-main: $path is missing in $SRC"
+            mkdir -p "$(dirname "$path")"
+            cp -a --reflink=auto "$SRC/$path" "$path"
+        done < .pw-runtime/copy-from-main
+    fi
+
+    # This file gates HTTP before ProcessWire boots, also between container start and DB sanitizing.
+    # A private copy, not a symlink: paths outside the container mount cannot be required.
+    if [[ "$base" == config-pw-runtime.php && ! -f site/$base ]]; then
+        (umask 077; cp "$SRC/site/config-dev.php" "site/$base")
+    fi
+    cat > site/config-dev.php <<PHP
+<?php namespace ProcessWire;
+// $MARK runtime config
+if(PHP_SAPI !== 'cli' && !is_file(__DIR__ . '/../$STATE/ready')) {
+    http_response_code(503);
+    exit('pw-runtime: this runtime is provisioning.');
+}
+require __DIR__ . '/$base';
+// Never inherit an external database, replica or mail transport from the source config.
+\$config->dbHost = 'db';
+\$config->dbName = 'db';
+\$config->dbUser = 'db';
+\$config->dbPass = 'db';
+\$config->dbPort = '3306';
+\$config->dbSocket = '';
+\$config->dbReader = [];
+\$config->wireMail = ['module' => 'WireMail']; // DDEV PHP mail -> this runtime's Mailpit
+\$config->httpHosts = [$(printf "'%s.$tld', " "$SLUG" "${hosts[@]}")];
+PHP
+    chmod 600 site/config-dev.php
+    cat > .ddev/config.local.yaml <<YAML
+# $MARK, do not commit
+name: $SLUG
+additional_hostnames: $(jq -cn '$ARGS.positional' --args "${hosts[@]}")
+additional_fqdns: []
+bind_all_interfaces: false
+fail_on_hook_fail: true
+override_config: true
+YAML
+    # A customized router file carries the project name; the runtime needs its own.
+    # The ignore rule also covers the router file DDEV generates itself otherwise.
+    exclude "/.ddev/traefik/config/$SRC_NAME-*-*.yaml"
+    file=".ddev/traefik/config/$SRC_NAME.yaml"
+    if [[ -f "$file" ]] && ! grep -q '^#ddev-generated' "$file"; then
+        # shortcut: plain name substitution, wrong if the project name is also an ordinary word in that file; template it then.
+        path=".ddev/traefik/config/$SLUG.yaml"
+        [[ ! -e "$path" ]] || grep -q -e "$MARK" -e '^#ddev-generated' "$path" || die "refusing to overwrite $path"
+        { echo "# $MARK from $SRC_NAME.yaml, do not commit"; sed "s/$SRC_NAME/$SLUG/g" "$file"; } > "$path"
+    fi
+
+    # Files: private reflink copy by default, read-only source mount where a reflink is impossible.
+    mkdir -p site/assets/{cache,logs,sessions,backups,files}
+    if [[ -f $STATE/mode ]]; then
+        mode="$(<$STATE/mode)"
+    else
+        seed="${XDG_CACHE_HOME:-$HOME/.cache}/pw-runtime/$(printf '%s' "$SRC" | sha1sum | cut -c1-12)/files-seed"
+        set +e
+        seed_reflink_copy "$SRC/site/assets/files" "$seed" "$ROOT/site/assets/files"
+        rc=$?
+        set -e
+        case "$rc" in
+            0) mode=private ;;
+            3)
+                mode=readonly
+                log "NOTICE: cannot reflink from $(dirname "$seed") into this worktree; mounting the source's site/assets/files read-only instead (uploads and new image variations will fail)"
+                # JSON quoting is valid YAML and handles spaces and quotes in a source path.
+                cat > .ddev/docker-compose.pw-runtime.yaml <<YAML
+# $MARK, do not commit
+services:
+  web:
+    volumes:
+      - $(jq -Rn --arg path "$SRC/site/assets/files:/var/www/html/site/assets/files:ro" '$path')
+YAML
+                ;;
+            *) die 'private files copy failed' ;;
+        esac
+        printf '%s\n' "$mode" > $STATE/mode
+    fi
+
+    # Verify the effective identity before any start or import. Override collisions fail closed.
+    status="$(ddev utility configyaml 2>/dev/null)" || die 'could not read the effective DDEV config'
+    grep -Eq "^name: $SLUG$" <<<"$status" || die 'effective DDEV project name differs from the runtime slug'
+    ddev start -y
+    check_registration
+    if [[ ! -f $STATE/seeded ]]; then
+        dump="$(mktemp --suffix=.sql.gz)"
+        # shellcheck disable=SC2064 # expand now: the local is out of scope when the trap fires
+        trap "rm -f '$dump'" EXIT
+        log 'exporting the running source database and importing it into the runtime ...'
+        (cd "$SRC" && ddev export-db --file="$dump")
+        ddev import-db --file="$dump"
+    fi
+    # Raw SQL in the runtime database only; ProcessWire must not boot before this passed.
+    ddev mysql < .pw-runtime/sanitize.sql
+    if [[ -f .pw-runtime/verify.sql ]]; then
+        [[ "$(ddev mysql -N < .pw-runtime/verify.sql)" == 0 ]] || die 'runtime database verification failed (.pw-runtime/verify.sql must return 0)'
+    fi
+    touch $STATE/seeded
+    if [[ -f .pw-runtime/after-up.sh ]]; then
+        PW_RUNTIME_SLUG="$SLUG" PW_RUNTIME_URL="$url" PW_RUNTIME_SOURCE="$SRC" bash -e -o pipefail .pw-runtime/after-up.sh
+    fi
+    touch $STATE/ready
+    # DDEV's router answers 502 or 404 for a moment after a (re)start: return only once the runtime itself answers.
+    for _ in {1..30}; do
+        rc="$(curl --noproxy '*' -ks -m 5 -o /dev/null -w '%{http_code}' "$url/" || true)"
+        [[ "$rc" =~ ^(000|404|502)$ ]] || break
+        sleep 1
+    done
+    [[ ! "$rc" =~ ^(000|404|502)$ ]] || log "NOTICE: $url still answers HTTP $rc; see \"ddev logs\""
+    log "ready: $url ($mode files; mail -> this runtime's Mailpit). Run \"pw-runtime down\" before removing this worktree."
+    jq -cn --arg slug "$SLUG" --arg url "$url" --arg mode "$mode" '{slug: $slug, url: $url, fileMode: $mode, ready: true}' >&3
+}
+
+main() {
+    local command="${1:-}"
+    (($# == 0)) || shift
+    case "$command" in
+        guard | up | down | gc) "cmd_$command" "$@" ;;
+        *) echo 'usage: pw-runtime <guard|up|down|gc>   (see README.md)' >&2; exit 2 ;;
+    esac
+}
+[[ "${BASH_SOURCE[0]}" != "$0" ]] || main "$@"
