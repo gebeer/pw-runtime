@@ -164,10 +164,9 @@ cmd_down() {
     if [[ -n "$(registered_root)" ]]; then
         ddev delete -Oy "$SLUG" >&2
     fi
-    for file in .ddev/config.local.yaml .ddev/docker-compose.pw-runtime.yaml ".ddev/traefik/config/$SLUG.yaml" site/config-dev.php; do
+    for file in .ddev/config.local.yaml .ddev/docker-compose.pw-runtime.yaml site/config-dev.php; do
         if [[ -e "$file" ]]; then
-            # A router file without the marker is DDEV's own generated one: leave it.
-            grep -q "$MARK" "$file" || { [[ "$file" == .ddev/traefik/* ]] && continue; die "refusing to remove unrecognized $file"; }
+            grep -q "$MARK" "$file" || die "refusing to remove unrecognized $file"
             rm "$file"
         fi
     done
@@ -280,16 +279,8 @@ bind_all_interfaces: false
 fail_on_hook_fail: true
 override_config: true
 YAML
-    # A customized router file carries the project name; the runtime needs its own.
-    # The ignore rule also covers the router file DDEV generates itself otherwise.
+    # DDEV generates the runtime's router file; this covers a project whose .ddev/.gitignore is not DDEV's own.
     exclude "/.ddev/traefik/config/$SRC_NAME-*-*.yaml"
-    file=".ddev/traefik/config/$SRC_NAME.yaml"
-    if [[ -f "$file" ]] && ! grep -q '^#ddev-generated' "$file"; then
-        # shortcut: plain name substitution, wrong if the project name is also an ordinary word in that file; template it then.
-        path=".ddev/traefik/config/$SLUG.yaml"
-        [[ ! -e "$path" ]] || grep -q -e "$MARK" -e '^#ddev-generated' "$path" || die "refusing to overwrite $path"
-        { echo "# $MARK from $SRC_NAME.yaml, do not commit"; sed "s/$SRC_NAME/$SLUG/g" "$file"; } > "$path"
-    fi
 
     # Files: private reflink copy by default, read-only source mount where a reflink is impossible.
     mkdir -p site/assets/{cache,logs,sessions,backups,files}

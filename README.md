@@ -37,7 +37,6 @@ A project without `.pw-runtime/sanitize.sql` is refused by `up`; `guard` and `do
 - **Name** = `<source DDEV name>-<worktree folder>-<6 hex of a salted path hash>`.
 - **Hostnames** = the source's hostnames with the project name replaced; a hostname without the project name is dropped with a notice. The URL uses `www.` when the source has a `www.` hostname.
 - **Database type and version, PHP, add-ons** = the tracked `.ddev/config.yaml` of the worktree. Name and hostnames are overridden in a generated `.ddev/config.local.yaml`.
-- **Router** = if the project tracks a customized `.ddev/traefik/config/<name>.yaml` (no `#ddev-generated`), the runtime gets its own copy with the name replaced.
 - **Config** = generated `site/config-dev.php`. It answers 503 to HTTP until the database is imported and sanitized, then loads a private copy of the source's `site/config-dev.php` (or the tracked `site/config.php` if the source has none) and forces the database to the runtime's own `db` container, core WireMail (DDEV's Mailpit) and the runtime `httpHosts`.
 - **Files** = private: a per-source seed in `~/.cache/pw-runtime/<hash>/files-seed` is refreshed with `rsync -a --delete` and reflinked into the worktree. The first seed is one full copy. Where a reflink is impossible, the source's `site/assets/files` is mounted read-only instead, with a notice; uploads and new image variations then fail.
 - **Agent config** = `guard` and `up` copy `.agents`, `.claude` and `.pi` from the main checkout, each only if it exists there, the repository does not track it and the worktree has none. Symlinks are copied as symlinks. An existing copy is never updated, and `down` leaves the copies; they go with the worktree.
@@ -54,8 +53,32 @@ A project without `.pw-runtime/sanitize.sql` is refused by `up`; `guard` and `do
 
 Known limits:
 
-- A tracked customized router file also lands in the worktree. DDEV merges it into the runtime's router config, so the main project's routers are defined twice. Harmless while both copies are equal; a branch that changes that file may change the main project's routing while its runtime runs.
 - Fixed host ports in `.ddev/config.yaml` (`host_db_port` and similar) would collide; `additional_fqdns` are not carried over.
+
+## Apache-level HTTPS in DDEV
+
+DDEV's router ends TLS and talks plain http to the web container, so Apache's `%{HTTPS}` stays
+off and `.htaccess` redirects built on it point to `http://`. Do not fix this with a tracked
+`.ddev/traefik/config/<project>.yaml`: in a worktree the project has another name, DDEV merges
+that file as an extra one, the main project's routers are defined twice, and every start waits
+60 s for a router count that never matches.
+
+Track a name-free delta instead and let DDEV generate its own router file:
+
+1. Copy [`examples/https-parity.tpl.yaml`](examples/https-parity.tpl.yaml) to `.ddev/traefik/https-parity.tpl.yaml`.
+2. Add the hook to `.ddev/config.yaml` (merge it with hooks already there):
+
+   ```yaml
+   hooks:
+     pre-start:
+       - exec-host: mkdir -p .ddev/traefik/config && sed "s/__NAME__/$DDEV_SITENAME/g" .ddev/traefik/https-parity.tpl.yaml > .ddev/traefik/config/https-parity.yaml
+   ```
+
+3. Ignore `/.ddev/traefik/config/` in the project's `.gitignore` and track no file there.
+
+DDEV merges the generated delta over its own config: the https router forwards to Apache's TLS
+vhost on port 443, the http router redirects to https. It works the same in the main project
+and in every runtime.
 
 ## Tests
 

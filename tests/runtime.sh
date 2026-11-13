@@ -14,10 +14,9 @@ source "$CLI"
 
 # The main checkout is the source; opt-in files are tracked, local files are not.
 SRC="$TMP/main"
-mkdir -p "$TMP/fake" "$SRC/.ddev/traefik/config" "$SRC/site/assets/files" "$SRC/.pw-runtime" "$SRC/build/dist"
+mkdir -p "$TMP/fake" "$SRC/.ddev" "$SRC/site/assets/files" "$SRC/.pw-runtime" "$SRC/build/dist"
 git init -q -b main "$SRC"
 printf 'name: source\n' > "$SRC/.ddev/config.yaml"
-printf '# customized\nrule: HostRegexp(`^www\\.source\\.ddev\\.site$`)\nurl: https://ddev-source-web:443\n' > "$SRC/.ddev/traefik/config/source.yaml"
 printf '<?php // tracked\n' > "$SRC/site/config.php"
 printf 'UPDATE modules SET data = "" WHERE class = "Mailer";\n' > "$SRC/.pw-runtime/sanitize.sql"
 printf 'SELECT COUNT(*) FROM modules WHERE data != "";\n' > "$SRC/.pw-runtime/verify.sql"
@@ -90,9 +89,8 @@ jq -e --arg slug "$EXPECTED_SLUG" '.slug == $slug and .ready == true and .url ==
 # Hostnames follow the source with the project name replaced; a hostname without it is dropped.
 grep -qxF "additional_hostnames: [\"www.$EXPECTED_SLUG\"]" .ddev/config.local.yaml
 grep -q 'intranet.ddev.site does not contain the project name' "$TMP/up.log"
-# The customized router file is regenerated for the runtime; the tracked one is untouched.
-grep -qF "url: https://ddev-$EXPECTED_SLUG-web:443" ".ddev/traefik/config/$EXPECTED_SLUG.yaml"
-grep -qF "^www\\.$EXPECTED_SLUG\\.ddev\\.site\$" ".ddev/traefik/config/$EXPECTED_SLUG.yaml"
+# Router files are left to DDEV and the project: up writes none.
+[[ ! -e .ddev/traefik ]]
 git diff --quiet
 # Local files listed by the project are copied; sanitizing SQL and the hook ran.
 cmp "$SRC/.htaccess" .htaccess
@@ -151,7 +149,7 @@ reject bash "$CLI" down
 unset DELETE_FAIL
 bash "$CLI" down 2> /dev/null
 grep -qxF "delete -Oy $EXPECTED_SLUG" "$FAKE_LOG"
-[[ ! -e .pw-runtime/state && ! -e "$FAKE_ACTIVE" && ! -e .ddev/config.local.yaml && ! -e .ddev/docker-compose.pw-runtime.yaml && ! -e ".ddev/traefik/config/$EXPECTED_SLUG.yaml" ]]
+[[ ! -e .pw-runtime/state && ! -e "$FAKE_ACTIVE" && ! -e .ddev/config.local.yaml && ! -e .ddev/docker-compose.pw-runtime.yaml ]]
 grep -qxF '// pw-runtime: generated code-only guard' site/config-dev.php
 [[ -f .htaccess && -z "$(git status --porcelain)" ]]
 

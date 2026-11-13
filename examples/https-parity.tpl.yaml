@@ -1,0 +1,17 @@
+# Router delta merged over DDEV's generated config: https goes to Apache's own TLS vhost, http redirects to https.
+http:
+  routers:
+    __NAME__-web-80-http:
+      middlewares:
+        - "__NAME__-redirectHttps"
+    __NAME__-web-80-https:
+      service: "__NAME__-web-443"
+  services:
+    __NAME__-web-443:
+      loadbalancer:
+        serversTransport: "__NAME__-web-tls"
+        servers:
+          - url: https://ddev-__NAME__-web:443
+  serversTransports:
+    __NAME__-web-tls:
+      insecureSkipVerify: true
